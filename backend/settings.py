@@ -69,11 +69,11 @@ MIDDLEWARE = [
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'railway',        # tu base en Postgres
-        'USER': 'postgres',       # tu usuario de Postgres
-        'PASSWORD': 'jHwuWmFrBPbGYdDxMEeqbgpaiJIFFDBJ',# tu password
-        'HOST': 'gondola.proxy.rlwy.net',      # host
-        'PORT': '34394',           # puerto de Docker
+        'NAME': 'railway',       
+        'USER': 'postgres',     
+        'PASSWORD': 'jHwuWmFrBPbGYdDxMEeqbgpaiJIFFDBJ',
+        'HOST': 'gondola.proxy.rlwy.net',     
+        'PORT': '34394',         
     }
 }
 
