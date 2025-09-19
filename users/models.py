@@ -1,13 +1,10 @@
-from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
+from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.db import models
 
-
-# -------------------------------
-#  PERMISSION
-# -------------------------------
 class Permission(models.Model):
-    name = models.CharField(max_length=50)
-    code = models.CharField(max_length=50, unique=True)
+    # Ej: "view_users", "view_notices", "view:file:/reportes/*"
+    name = models.CharField(max_length=80)
+    code = models.CharField(max_length=120, unique=True)
     description = models.TextField(blank=True)
 
     class Meta:
@@ -17,9 +14,6 @@ class Permission(models.Model):
         return self.code
 
 
-# -------------------------------
-#  ROLE
-# -------------------------------
 class Role(models.Model):
     name = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True)
@@ -32,37 +26,35 @@ class Role(models.Model):
         return self.name
 
 
-# -------------------------------
-#  CUSTOM USER MANAGER
-# -------------------------------
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError("El usuario debe tener un correo electrónico")
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
-        user.set_password(password)
+        if password:
+            user.set_password(password)
         user.save(using=self._db)
         return user
 
+    # No hay is_superuser/is_staff/is_active
     def create_superuser(self, email, password=None, **extra_fields):
-        extra_fields.setdefault("is_superuser", True)
         return self.create_user(email, password, **extra_fields)
 
 
-
-# -------------------------------
-#  USER (LOGIN POR EMAIL)
-# -------------------------------
-class User(AbstractBaseUser, PermissionsMixin):
+class User(AbstractBaseUser):
     first_name = models.CharField(max_length=150, blank=True)
-    last_name = models.CharField(max_length=150, blank=True)
-    email = models.EmailField(unique=True)
+    last_name  = models.CharField(max_length=150, blank=True)
+    email      = models.EmailField(unique=True)
 
-    role = models.ForeignKey(Role, related_name="users", on_delete=models.SET_NULL, null=True, blank=True)
-    extra_permissions = models.ManyToManyField(Permission, related_name="users", blank=True)  # 👈 lo devuelvo
+    role = models.ForeignKey(
+        Role, related_name="users", on_delete=models.SET_NULL, null=True, blank=True
+    )
 
-    USERNAME_FIELD = "email"   # login con email
+    # quitar last_login
+    last_login = None
+
+    USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
 
     objects = UserManager()
@@ -74,7 +66,6 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.email
 
     def get_all_permissions(self):
-        role_perms = self.role.permissions.all() if self.role else Permission.objects.none()
-        direct_perms = self.extra_permissions.all()
-        return (role_perms | direct_perms).distinct()
-
+        if not self.role:
+            return Permission.objects.none()
+        return self.role.permissions.all()

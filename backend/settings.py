@@ -30,6 +30,21 @@ DEBUG = True
 ALLOWED_HOSTS = []
 
 
+# backend/settings.py
+import os
+from pathlib import Path
+import environ   # 👈 nuevo
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Inicializar django-environ
+env = environ.Env()
+environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
+
+# Stripe Keys desde .env
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -50,6 +65,9 @@ INSTALLED_APPS = [
     "users",
     "notices",
     "commons",
+    "payments",
+    'maintenance',
+    "condominio"
 ]
 
 
@@ -69,11 +87,11 @@ MIDDLEWARE = [
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'railway',       
-        'USER': 'postgres',     
+        'NAME': 'railway',
+        'USER': 'postgres',
         'PASSWORD': 'jHwuWmFrBPbGYdDxMEeqbgpaiJIFFDBJ',
-        'HOST': 'gondola.proxy.rlwy.net',     
-        'PORT': '34394',         
+        'HOST': 'gondola.proxy.rlwy.net',
+        'PORT': '34394',
     }
 }
 
@@ -99,7 +117,10 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.AllowAny',   # 👈 para que login sea público
     ),
 }
-
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",   # login email+password
+    "users.auth_backends.RolePermissionBackend",   # permisos por rol (con wildcard)
+]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",

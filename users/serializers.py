@@ -1,43 +1,31 @@
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import User, Role, Permission
-
 
 class PermissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Permission
-        fields = ["id", "name", "code"]
-
+        fields = ["id", "name", "code", "description"]
 
 class RoleSerializer(serializers.ModelSerializer):
     permissions = PermissionSerializer(many=True, read_only=True)
-
+    permission_ids = serializers.PrimaryKeyRelatedField(
+        many=True, write_only=True, queryset=Permission.objects.all(),
+        source="permissions", required=False
+    )
     class Meta:
         model = Role
-        fields = ["id", "name", "description", "permissions"]
-
+        fields = ["id", "name", "description", "permissions", "permission_ids"]
 
 class UserSerializer(serializers.ModelSerializer):
     role = RoleSerializer(read_only=True)
     role_id = serializers.PrimaryKeyRelatedField(
         queryset=Role.objects.all(), source="role", write_only=True, allow_null=True
     )
-    extra_permissions = PermissionSerializer(many=True, read_only=True)
-
     class Meta:
         model = User
-        fields = [
-            "id",
-            "first_name",
-            "last_name",
-            "email",
-            "password",
-            "role",
-            "role_id",
-            "extra_permissions",
-        ]
-        extra_kwargs = {
-            "password": {"write_only": True},
-        }
+        fields = ["id", "first_name", "last_name", "email", "password", "role", "role_id"]
+        extra_kwargs = {"password": {"write_only": True}}
 
     def create(self, validated_data):
         password = validated_data.pop("password", None)
@@ -55,26 +43,20 @@ class UserSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+    
 
-
-
-
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-
+from .models import Permission  # si no lo tenías importado
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
 
-        # Rol único
         data["role"] = self.user.role.name if self.user.role else None
 
-        # ✅ Ahora guardamos permisos bajo el nombre correcto
-        data["extra_permissions"] = [p.code for p in self.user.get_all_permissions()]
+        role_perms = self.user.role.permissions.all() if self.user.role else Permission.objects.none()
+        data["permissions"] = [p.code for p in role_perms]
 
-        # También podés devolver email y nombre si querés
         data["email"] = self.user.email
         data["first_name"] = self.user.first_name
         data["last_name"] = self.user.last_name
-
         return data
