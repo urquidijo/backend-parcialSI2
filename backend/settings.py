@@ -67,7 +67,8 @@ INSTALLED_APPS = [
     "commons",
     "payments",
     'maintenance',
-    "condominio"
+    "condominio",
+    "bitacora",
 ]
 
 

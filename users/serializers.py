@@ -51,12 +51,19 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
 
+        # 🔹 Incluimos ID del usuario
+        data["id"] = self.user.id  
+
+        # 🔹 Info de rol
         data["role"] = self.user.role.name if self.user.role else None
 
+        # 🔹 Permisos asociados al rol
         role_perms = self.user.role.permissions.all() if self.user.role else Permission.objects.none()
         data["permissions"] = [p.code for p in role_perms]
 
+        # 🔹 Datos básicos del usuario
         data["email"] = self.user.email
         data["first_name"] = self.user.first_name
         data["last_name"] = self.user.last_name
+
         return data
