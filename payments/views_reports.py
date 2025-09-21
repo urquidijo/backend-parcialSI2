@@ -1,7 +1,8 @@
 from decimal import Decimal
 
+from django.apps import apps
 from django.db import models
-from django.db.models import Value, CharField, DateField, Q
+from django.db.models import Value, CharField, Q, Exists, OuterRef
 from django.db.models.functions import Coalesce
 from django.utils.dateparse import parse_date
 
@@ -13,6 +14,11 @@ from rest_framework import status
 from payments.models import Payment
 
 
+def is_admin(user):
+    role = getattr(user, "role", None)
+    return bool(role and str(getattr(role, "name", "")).lower() in ("administrador", "administrator", "admin"))
+
+
 def _user_display(first: str | None, last: str | None, email: str | None) -> str:
     f = (first or "").strip()
     l = (last or "").strip()
@@ -21,12 +27,6 @@ def _user_display(first: str | None, last: str | None, email: str | None) -> str
 
 
 def _property_label_from_charge(charge_obj) -> str:
-    """
-    Devuelve una etiqueta legible de la propiedad:
-    - charge.propiedad.codigo
-    - o 'edificio-numero'
-    - o el id
-    """
     if not charge_obj:
         return "-"
     prop = getattr(charge_obj, "propiedad", None)
@@ -51,13 +51,8 @@ def payments_report(request):
     Reporte de pagos REALIZADOS (SUCCEEDED) SOLO de CARGOS (expensas, multas, etc).
     NO incluye reservas.
 
-    Respuesta (JSON/CSV):
-      id, tipo, propiedad, residente, departamento, paid_at, monto, moneda, recibo_url
-
-    Filtros:
-      q, tipo_id, fecha, desde, hasta, export=csv
+    Filtros: q, tipo_id, fecha, desde, hasta, export=csv
     """
-    # Solo pagos de cargos
     qs = (
         Payment.objects.select_related(
             "user",
@@ -66,6 +61,45 @@ def payments_report(request):
         )
         .filter(status=Payment.Status.SUCCEEDED, charge__isnull=False)
     )
+
+    # 🔐 Scope por usuario (dueño o inquilino)
+    if not is_admin(request.user):
+        # dueños
+        Prop = apps.get_model("condominio", "Property")
+        names = {f.name for f in Prop._meta.fields}
+        owner_q = Q()
+        for fname in ("owner", "usuario", "user", "propietario"):
+            if fname in names:
+                owner_q |= Q(**{f"charge__propiedad__{fname}_id": request.user.id})
+
+        qs = qs.filter(owner_q) if owner_q else qs.none()
+
+        # inquilinos
+        try:
+            PT = apps.get_model("condominio", "PropertyTenant")
+            tnames = {f.name for f in PT._meta.fields}
+            user_field = "user" if "user" in tnames else ("usuario" if "usuario" in tnames else None)
+            prop_field = "property" if "property" in tnames else ("propiedad" if "propiedad" in tnames else None)
+            if user_field and prop_field:
+                active_filters = {}
+                if "active" in tnames:
+                    active_filters["active"] = True
+                if "is_active" in tnames:
+                    active_filters["is_active"] = True
+                if "vigente" in tnames:
+                    active_filters["vigente"] = True
+                if "end_date" in tnames:
+                    active_filters["end_date__isnull"] = True
+                if "hasta" in tnames:
+                    active_filters["hasta__isnull"] = True
+
+                sub = PT.objects.filter(
+                    **{f"{user_field}_id": request.user.id, f"{prop_field}_id": OuterRef("charge__propiedad_id")},
+                    **active_filters,
+                )
+                qs = qs.annotate(_is_tenant=Exists(sub)).filter(owner_q | Q(_is_tenant=True))
+        except Exception:
+            pass
 
     # Texto (usuario)
     qtext = (request.query_params.get("q") or "").strip()
@@ -82,8 +116,7 @@ def payments_report(request):
     if tipo_id:
         qs = qs.filter(charge__price_config_id=tipo_id)
 
-    # 🔧 Anotaciones:
-    # - paid_at viene DIRECTO de charge.paid_at (sin Coalesce)
+    # Anotaciones
     qs = qs.annotate(
         paid_at_anno=models.F("charge__paid_at"),
         tipo_anno=Coalesce(models.F("charge__price_config__type"), Value("", output_field=CharField())),
@@ -109,7 +142,7 @@ def payments_report(request):
     # Orden
     qs = qs.order_by("-paid_at_anno", "-id")
 
-    # Construcción de filas
+    # Serialización manual
     rows = []
     for p in qs:
         tipo = getattr(p, "tipo_anno", "") or ""
@@ -120,13 +153,13 @@ def payments_report(request):
         rows.append(
             {
                 "id": p.id,
-                "tipo": tipo,                       # p.ej. "Multa Parking", "Expensas"
-                "propiedad": propiedad,             # p.ej. "A-A-101"
+                "tipo": tipo,
+                "propiedad": propiedad,
                 "residente": residente,
                 "departamento": None,
-                "paid_at": paid_at,                 # "YYYY-MM-DD"
+                "paid_at": paid_at,
                 "monto": f"{amount.quantize(Decimal('0.01'))}",
-                "moneda": "USD",                    # cambia si usas BOB
+                "moneda": "USD",
                 "recibo_url": p.receipt_url or None,
             }
         )
@@ -137,7 +170,7 @@ def payments_report(request):
         from django.http import HttpResponse
 
         resp = HttpResponse(content_type="text/csv; charset=utf-8")
-        resp["Content-Disposition"] = 'attachment; filename=\"reporte_pagos.csv\"'
+        resp["Content-Disposition"] = 'attachment; filename="reporte_pagos.csv"'
         w = csv.writer(resp)
         w.writerow(["Tipo", "Propiedad", "Residente", "Fecha de pago", "Monto", "Moneda", "Comprobante"])
         for r in rows:

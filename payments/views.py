@@ -1,3 +1,4 @@
+# backend/payments/views.py
 from decimal import Decimal, ROUND_HALF_UP
 import stripe
 
@@ -5,7 +6,6 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db.models import Q
-
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -15,7 +15,12 @@ from commons.models import ReservaAreaComun
 from .models import Payment, PriceConfig, Charge
 from .serializers import PaymentSerializer, PriceConfigSerializer, ChargeSerializer
 
+# 👇 tu modelo de casa
+from condominio.models import Property
 
+from django.db.models import Q
+from condominio.models import Property, PropertyTenant
+from .models import Charge  # tu modelo de cargos
 # =========================
 # Stripe & URLs
 # =========================
@@ -150,19 +155,47 @@ class PriceConfigViewSet(viewsets.ModelViewSet):
 # =========================
 class ChargeViewSet(viewsets.ModelViewSet):
     """
-    CRUD de cargos/multas por propiedad.
-    El monto se toma de price_config.base_price (no se guarda amount en Charge).
+    VISIBILIDAD:
+      - Admin: ve todos los cargos.
+      - Copropietario: solo cargos de sus propiedades (Property.owner).
+      - Inquilino: solo cargos de propiedades donde figura en M2M Property.tenants.
     """
-    # OJO: el campo es 'propiedad', NO 'property'
     queryset = Charge.objects.select_related("price_config", "propiedad").all()
     serializer_class = ChargeSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+
+
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Charge.objects.select_related("price_config", "propiedad")  # "propiedad" es la FK a property
+
+        # 1) Admin ve todo
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False) or getattr(user, "role_id", None) == 1:
+            return qs
+
+        # 2) Propiedades donde es dueño
+        owned_ids = Property.objects.filter(owner=user).values_list("id", flat=True)
+
+        # 3) Propiedades donde es inquilino (tabla puente que mostraste)
+        tenant_ids = PropertyTenant.objects.filter(user=user).values_list("property_id", flat=True)
+
+        # 4) Unimos ambos conjuntos
+        my_prop_ids = list(set(owned_ids).union(set(tenant_ids)))
+
+        # Si no está vinculado a ninguna, no ve nada
+        if not my_prop_ids:
+            return qs.none()
+
+        # 5) Filtramos por la FK real del modelo Charge → `propiedad`
+        return qs.filter(propiedad_id__in=my_prop_ids)
 
     def perform_create(self, serializer):
         if not is_admin(self.request.user):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Solo administradores pueden crear cargos.")
-        serializer.save()
+        serializer.save(created_by=self.request.user)
 
     def perform_update(self, serializer):
         if not is_admin(self.request.user):
@@ -186,10 +219,6 @@ def create_checkout_session(request):
     """
     Body JSON:
       - reservation_id OR charge_id (exactamente uno)
-
-    Monto:
-      - reserva: reserva.area.precio
-      - cargo:   charge.price_config.base_price
     """
     reservation_id = request.data.get("reservation_id")
     charge_id = request.data.get("charge_id")
@@ -207,7 +236,16 @@ def create_checkout_session(request):
         target_kwargs = {"reservation": reserva}
         product_name = f"Reserva Área - {reserva.area.nombre}"
     else:
-        cargo = get_object_or_404(Charge.objects.select_related("price_config"), pk=charge_id)
+        cargo = get_object_or_404(Charge.objects.select_related("price_config", "propiedad"), pk=charge_id)
+
+        # Seguridad: si NO es admin, solo puede pagar cargos de sus propiedades (owner o tenants)
+        if not is_admin(request.user):
+            ok = Property.objects.filter(
+                Q(pk=cargo.propiedad_id) & (Q(owner=request.user) | Q(tenants=request.user))
+            ).exists()
+            if not ok:
+                return Response({"detail": "No tienes acceso a este cargo."}, status=403)
+
         amount_dec = Decimal(cargo.amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         target_kwargs = {"charge": cargo}
         product_name = f"Cargo - {cargo.price_config.type}"
@@ -220,6 +258,8 @@ def create_checkout_session(request):
         defaults={
             "amount": amount_dec,
             "status": Payment.Status.PENDING,
+            "created_at": timezone.localdate(),
+            "updated_at": timezone.localdate(),
         },
     )
 
