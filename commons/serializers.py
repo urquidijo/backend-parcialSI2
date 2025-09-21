@@ -1,6 +1,8 @@
+# commons/serializers.py
 from rest_framework import serializers
 from .models import AreaComun, ReservaAreaComun
 
+# ---------- ÁREAS ----------
 class AreaComunSerializer(serializers.ModelSerializer):
     class Meta:
         model = AreaComun
@@ -13,12 +15,24 @@ class AreaComunSerializer(serializers.ModelSerializer):
             "estado",
             "horario_apertura",
             "horario_cierre",
+            "precio",
         ]
 
 
+# ---------- RESERVAS ----------
 class ReservaAreaComunSerializer(serializers.ModelSerializer):
     usuario_username = serializers.CharField(source="usuario.username", read_only=True)
     area_nombre = serializers.CharField(source="area.nombre", read_only=True)
+    # precio solo-lectura (viene del área)
+    precio = serializers.DecimalField(max_digits=10, decimal_places=2, source="area.precio", read_only=True)
+
+    # nueva: fecha en que la reserva quedó APROBADA (solo fecha)
+    approved_at = serializers.DateField(read_only=True)
+
+    # (opcionales de pagos si usas payments)
+    paid = serializers.SerializerMethodField(read_only=True)
+    payment_status = serializers.SerializerMethodField(read_only=True)
+    receipt_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ReservaAreaComun
@@ -28,36 +42,50 @@ class ReservaAreaComunSerializer(serializers.ModelSerializer):
             "area", "area_nombre",
             "fecha_reserva", "hora_inicio", "hora_fin",
             "estado",
+            "precio",
+            "approved_at",              # <- aquí exponemos la fecha de aprobación
+            "paid", "payment_status", "receipt_url",
         ]
-        read_only_fields = ["usuario", "estado"]
+        read_only_fields = ["usuario", "precio", "approved_at", "paid", "payment_status", "receipt_url"]
 
     def validate(self, attrs):
-        # instancia para update
         instance = getattr(self, "instance", None)
-
-        area = attrs.get("area") or (instance.area if instance else None)
-        fecha = attrs.get("fecha_reserva") or (instance.fecha_reserva if instance else None)
         ini = attrs.get("hora_inicio") or (instance.hora_inicio if instance else None)
         fin = attrs.get("hora_fin") or (instance.hora_fin if instance else None)
-
-        if not (area and fecha and ini and fin):
-            return attrs
-
-        if ini >= fin:
+        if ini and fin and ini >= fin:
             raise serializers.ValidationError("hora_fin debe ser mayor que hora_inicio.")
-
-        # El solapamiento real igual lo valida models.clean(), pero dejamos este guardado simple:
-        from django.db.models import Q
-        qs = (ReservaAreaComun.objects
-              .filter(area=area, fecha_reserva=fecha, estado__in=["PENDIENTE", "APROBADA"])
-              .filter(hora_inicio__lt=fin, hora_fin__gt=ini))
-        if instance:
-            qs = qs.exclude(pk=instance.pk)
-        if qs.exists():
-            raise serializers.ValidationError("Ya existe una reserva que se superpone.")
-
         return attrs
 
     def create(self, validated_data):
         validated_data["usuario"] = self.context["request"].user
         return super().create(validated_data)
+
+    def get_paid(self, obj):
+        pay = getattr(obj, "payment", None)
+        return bool(pay and getattr(pay, "status", "") == "SUCCEEDED")
+
+    def get_payment_status(self, obj):
+        pay = getattr(obj, "payment", None)
+        return getattr(pay, "status", None) if pay else None
+
+    def get_receipt_url(self, obj):
+        pay = getattr(obj, "payment", None)
+        return getattr(pay, "receipt_url", None) if pay else None
+
+
+# ---------- REPORTES ----------
+class UsageReportRowSerializer(serializers.Serializer):
+    """
+    'fecha_aprobada' = día en que la reserva fue APROBADA (approved_at), sin hora.
+    """
+    id = serializers.IntegerField()
+    area_nombre = serializers.CharField()
+    residente = serializers.CharField()
+    departamento = serializers.CharField(allow_null=True)
+    fecha_aprobada = serializers.DateField(allow_null=True)
+    hora_inicio = serializers.TimeField()
+    hora_fin = serializers.TimeField()
+    precio = serializers.DecimalField(max_digits=10, decimal_places=2)
+    pago_monto = serializers.DecimalField(max_digits=10, decimal_places=2)
+    pago_estado = serializers.CharField()
+    pago_recibo = serializers.CharField(allow_blank=True)

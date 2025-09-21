@@ -1,37 +1,47 @@
 import re
 from rest_framework import serializers
-from .models import Property
+from .models import Property, PropertyTenant
+from users.serializers import UserSerializer  # serializer de tu User
+
+
+class PropertyTenantSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    user_id = serializers.PrimaryKeyRelatedField(
+        write_only=True, source="user", queryset=UserSerializer.Meta.model.objects.all()
+    )
+
+    class Meta:
+        model = PropertyTenant
+        fields = ["id", "user", "user_id"]
 
 
 class PropertySerializer(serializers.ModelSerializer):
-    # Permite mandar "120 m²" y guardarlo como número
+    owner = UserSerializer(read_only=True)
+    owner_id = serializers.PrimaryKeyRelatedField(
+        queryset=UserSerializer.Meta.model.objects.all(),
+        source="owner", write_only=True, allow_null=True, required=False
+    )
+    tenants = PropertyTenantSerializer(many=True, read_only=True)
+
+    # Permite mandar "120 m²"
     area = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = Property
         fields = [
-            "id",
-            "edificio",
-            "numero",
-            "propietario",
-            "telefono",
-            "email",
-            "estado",
-            "area_m2",
-            "area",
+            "id", "edificio", "numero",
+            "estado", "area_m2", "area",
+            "owner", "owner_id", "tenants",
         ]
-        extra_kwargs = {
-            "estado": {"required": False},
-            "area_m2": {"required": False},
-        }
+        extra_kwargs = {"estado": {"required": False}, "area_m2": {"required": False}}
 
     def _parse_area(self, txt):
         if not txt:
             return None
-        match = re.search(r"([\d.,]+)", txt)
-        if not match:
+        m = re.search(r"([\d.,]+)", txt)
+        if not m:
             return None
-        value = match.group(1).replace(".", "").replace(",", ".")
+        value = m.group(1).replace(".", "").replace(",", ".")
         try:
             return float(value)
         except ValueError:
@@ -39,21 +49,22 @@ class PropertySerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Formato para mostrar "120 m²"
         data["area"] = f"{int(instance.area_m2)} m²" if instance.area_m2 else ""
         return data
 
     def validate(self, attrs):
-        # Área
+        # Área libre-formato -> area_m2
         area_txt = attrs.pop("area", None)
         if area_txt:
             parsed = self._parse_area(area_txt)
             if parsed is not None:
                 attrs["area_m2"] = parsed
 
-        # Estado automático según propietario
+        # Estado automático: ocupada si hay dueño o inquilinos
         if "estado" not in attrs:
-            propietario = attrs.get("propietario", getattr(self.instance, "propietario", ""))
-            attrs["estado"] = "ocupada" if propietario else "disponible"
+            inst = getattr(self, "instance", None)
+            has_owner = bool(attrs.get("owner") or (inst and inst.owner_id))
+            has_tenants = bool(inst and inst.tenants.exists())
+            attrs["estado"] = "ocupada" if (has_owner or has_tenants) else "disponible"
 
         return attrs
