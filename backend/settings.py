@@ -33,7 +33,7 @@ ALLOWED_HOSTS = []
 # backend/settings.py
 import os
 from pathlib import Path
-import environ   # 👈 nuevo
+import environ   # 👈
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -43,7 +43,17 @@ environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
 # Stripe Keys desde .env
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
-STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
+STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")  # para frontend
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
+
+FRONTEND_SUCCESS_URL = env(
+    "FRONTEND_SUCCESS_URL",
+    default="http://localhost:5173/reservas?success=true"
+)
+FRONTEND_CANCEL_URL = env(
+    "FRONTEND_CANCEL_URL",
+    default="http://localhost:5173/reservas?canceled=true"
+)
 
 # Application definition
 
