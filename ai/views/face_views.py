@@ -14,8 +14,8 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .services.face_service import enroll_face, search_by_image
-from .models import UserFace
+from ..services.face_service import enroll_face, search_by_image 
+from ..models import UserFace
 
 # ========= AWS config =========
 AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
