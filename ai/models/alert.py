@@ -3,9 +3,8 @@ from django.db import models
 class Alert(models.Model):
     TYPE_CHOICES = [
         ("dog_loose", "Perro suelto"),
-        ("vehicle_seen", "Vehículo visto"),
-        # luego: ("bad_parking", "Vehículo mal estacionado"),
-        #       ("dog_waste", "Perro haciendo necesidades"),
+        ("dog_waste", "Perro haciendo necesidades"),
+        ("bad_parking", "Vehículo mal estacionado"),
     ]
     type = models.CharField(max_length=32, choices=TYPE_CHOICES)
     camera_id = models.CharField(max_length=64, blank=True, null=True)
