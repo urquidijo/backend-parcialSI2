@@ -15,3 +15,13 @@ class FaceStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserFace
         fields = ["user", "external_image_id", "face_id", "collection_id", "status", "s3_key", "created_at", "updated_at"]
+
+
+
+from rest_framework import serializers
+from ai.models.plate import Plate
+
+class PlateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Plate
+        fields = ["id", "number", "user"]
