@@ -13,14 +13,11 @@ from rest_framework.response import Response
 
 from commons.models import ReservaAreaComun
 from .models import Payment, PriceConfig, Charge
-from .serializers import PaymentSerializer, PriceConfigSerializer, ChargeSerializer
+from .serializers import ChargeListSerializer, PriceConfigSerializer, ChargeSerializer
 
-# 👇 tu modelo de casa
-from condominio.models import Property
 
 from django.db.models import Q
 from condominio.models import Property, PropertyTenant
-from .models import Charge  # tu modelo de cargos
 # =========================
 # Stripe & URLs
 # =========================
@@ -368,3 +365,70 @@ def reconcile_payment(request, pk: int):
 
     _mark_paid(payment, payment.stripe_payment_intent_id, payment.receipt_url)
     return Response({"ok": True})
+
+
+
+
+def _truthy(v):
+    return str(v).lower() in ("1","true","t","yes","y","on") if v is not None else False
+
+class MyChargesViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    SIEMPRE filtra por el usuario autenticado:
+      - Propiedades donde es dueño (Property.owner)
+      - Propiedades donde es inquilino (PropertyTenant)
+    Soporta filtros:
+      - ?only_open=1
+      - ?status=PENDING,OVERDUE
+      - ?property_id=2
+      - ?ordering=fecha_pago  (default: status,fecha_pago,-issued_at,-id)
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        # usa el "bonito" para list/retrieve
+        return ChargeListSerializer if self.action in ("list", "retrieve", "summary") else ChargeSerializer
+
+    def _my_property_ids(self, user_id: int):
+        owned  = Property.objects.filter(owner_id=user_id).values_list("id", flat=True)
+        tenant = PropertyTenant.objects.filter(user_id=user_id).values_list("property_id", flat=True)
+        return list(set(owned).union(set(tenant)))
+
+    def get_queryset(self):
+        user = self.request.user
+        ids = self._my_property_ids(user.id)
+
+        qs = Charge.objects.select_related("price_config", "propiedad").filter(propiedad_id__in=ids)
+
+        # filtros opcionales
+        prop_id = self.request.query_params.get("property_id")
+        if prop_id:
+            qs = qs.filter(propiedad_id=prop_id)
+
+        status_q = self.request.query_params.get("status")
+        if status_q:
+            st = [s.strip().upper() for s in status_q.split(",") if s.strip()]
+            qs = qs.filter(status__in=st)
+        elif _truthy(self.request.query_params.get("only_open")):
+            qs = qs.filter(status__in=[Charge.Status.PENDING, Charge.Status.OVERDUE])
+
+        ordering = self.request.query_params.get("ordering", "status,fecha_pago,-issued_at,-id")
+        order_fields = [o.strip() for o in ordering.split(",") if o.strip()]
+        return qs.order_by(*order_fields)
+
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request):
+        qs = self.get_queryset()
+        open_qs  = qs.filter(status__in=[Charge.Status.PENDING, Charge.Status.OVERDUE])
+        paid_qs  = qs.filter(status=Charge.Status.PAID)
+
+        total_open = open_qs.aggregate(total=sum(F("price_config__base_price")))["total"] or 0
+        count_open = open_qs.count()
+
+        total_paid = paid_qs.aggregate(total=sum(F("price_config__base_price")))["total"] or 0
+        count_paid = paid_qs.count()
+
+        return Response({
+            "open": {"count": count_open, "amount": f"{total_open:.2f}"},
+            "paid": {"count": count_paid, "amount": f"{total_paid:.2f}"},
+        })

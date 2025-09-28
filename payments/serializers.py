@@ -128,3 +128,146 @@ class PaymentListSerializer(serializers.ModelSerializer):
             "status",
             "receipt_url",
         ]
+
+def _prop_label(prop) -> str:
+    """
+    Intenta construir un label legible de la propiedad.
+    Ajusta los nombres de campos según tu modelo Property.
+    """
+    if not prop:
+        return ""
+    # ejemplos típicos de campo
+    edificio = getattr(prop, "edificio", None) or getattr(prop, "tower", None)
+    numero = getattr(prop, "numero", None) or getattr(prop, "unit", None)
+    name = getattr(prop, "name", None)
+
+    if edificio and numero:
+        return f"{edificio} - {numero}"
+    if name:
+        return str(name)
+    # fallback a __str__
+    return str(prop)
+
+
+# ======================================================
+# 1) Serializer "bonito" para listar cargos (solo lectura)
+#    Usado por ChargeViewSet(list/retrieve/summary) y MyChargesViewSet
+#    Devuelve EXACTAMENTE los campos que tu app espera.
+# ======================================================
+class ChargeListSerializer(serializers.ModelSerializer):
+    property_id = serializers.IntegerField(source="propiedad_id", read_only=True)
+    property_label = serializers.SerializerMethodField()
+    price_type = serializers.CharField(source="price_config.type", read_only=True)
+    # amount: puedes tomarlo de la relación o de la @property amount del modelo
+    amount = serializers.DecimalField(source="price_config.base_price", max_digits=10, decimal_places=2, read_only=True)
+    # Si prefieres usar la @property amount del modelo:
+    # amount = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Charge
+        fields = [
+            "id",
+            "property_id",
+            "property_label",
+            "price_type",
+            "amount",
+            "status",
+            "issued_at",
+            "fecha_pago",
+            "paid_at",
+        ]
+        read_only_fields = fields
+
+    def get_property_label(self, obj):
+        return _prop_label(getattr(obj, "propiedad", None))
+
+    # Si usas la @property amount del modelo:
+    # def get_amount(self, obj):
+    #     return f"{obj.amount:.2f}"
+
+
+# ======================================================
+# 2) Serializer de lectura para historial de pagos
+#    (cubre pagos por cargo y por reserva)
+# ======================================================
+class PaymentReadSerializer(serializers.ModelSerializer):
+    # IDs convenientes
+    charge_id = serializers.IntegerField(source="charge.id", read_only=True)
+    reservation_id = serializers.IntegerField(source="reservation.id", read_only=True)
+
+    # Campos "bonitos" según exista charge o reserva
+    price_type = serializers.SerializerMethodField()       # p.ej. tipo de cargo
+    property_id = serializers.SerializerMethodField()
+    property_label = serializers.SerializerMethodField()
+
+    # Para reservas (si las usas en el app)
+    area_id = serializers.SerializerMethodField()
+    area_nombre = serializers.SerializerMethodField()
+    fecha_reserva = serializers.SerializerMethodField()
+    hora_inicio = serializers.SerializerMethodField()
+    hora_fin = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Payment
+        fields = [
+            "id",
+            "charge_id",
+            "reservation_id",
+            "amount",
+            "status",
+            "receipt_url",
+
+            # info de cargo (si aplica)
+            "price_type",
+            "property_id",
+            "property_label",
+
+            # info de reserva (si aplica)
+            "area_id",
+            "area_nombre",
+            "fecha_reserva",
+            "hora_inicio",
+            "hora_fin",
+        ]
+        read_only_fields = fields
+
+    # ---------- charge helpers ----------
+    def get_price_type(self, obj):
+        ch = getattr(obj, "charge", None)
+        if ch and ch.price_config:
+            return ch.price_config.type
+        # para reservas podrías retornar nombre del área, si quieres
+        res = getattr(obj, "reservation", None)
+        if res and getattr(res, "area", None):
+            return f"Reserva - {res.area.nombre}"
+        return None
+
+    def get_property_id(self, obj):
+        ch = getattr(obj, "charge", None)
+        return getattr(ch, "propiedad_id", None) if ch else None
+
+    def get_property_label(self, obj):
+        ch = getattr(obj, "charge", None)
+        return _prop_label(getattr(ch, "propiedad", None)) if ch else None
+
+    # ---------- reserva helpers ----------
+    def get_area_id(self, obj):
+        res = getattr(obj, "reservation", None)
+        return getattr(getattr(res, "area", None), "id", None) if res else None
+
+    def get_area_nombre(self, obj):
+        res = getattr(obj, "reservation", None)
+        return getattr(getattr(res, "area", None), "nombre", None) if res else None
+
+    def get_fecha_reserva(self, obj):
+        res = getattr(obj, "reservation", None)
+        return getattr(res, "fecha_reserva", None) if res else None
+
+    def get_hora_inicio(self, obj):
+        res = getattr(obj, "reservation", None)
+        return getattr(res, "hora_inicio", None) if res else None
+
+    def get_hora_fin(self, obj):
+        res = getattr(obj, "reservation", None)
+        return getattr(res, "hora_fin", None) if res else None
+
