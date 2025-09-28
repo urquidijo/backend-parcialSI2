@@ -5,13 +5,12 @@ from typing import Optional, Tuple, Dict, Any
 from botocore.exceptions import ClientError
 from django.core.files.uploadedfile import InMemoryUploadedFile, TemporaryUploadedFile
 
-from ai.models import UserFace   # <-- importante para persistir en BD
+from ai.models import UserFace  # persiste en BD
 
 # ---------------------------
 # Env y clientes AWS
 # ---------------------------
 def _getenv(name: str, default: str = "") -> str:
-    # strip para evitar errores por espacios en .env (p. ej. "us-east-1 ")
     return os.getenv(name, default).strip()
 
 AWS_ACCESS_KEY_ID     = _getenv("AWS_ACCESS_KEY_ID")
@@ -19,7 +18,14 @@ AWS_SECRET_ACCESS_KEY = _getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION            = _getenv("AWS_REGION", "us-east-1")
 BUCKET                = _getenv("AWS_STORAGE_BUCKET_NAME")
 COLLECTION            = _getenv("AWS_COLLECTION_ID", "usuarios_faces")
-FACE_THRESHOLD        = int(_getenv("FACE_THRESHOLD", "85"))  # sube a 90 en prod
+FACE_THRESHOLD        = int(_getenv("FACE_THRESHOLD", "85"))
+
+# Prefijos (usuarios normales)
+FACE_ENROLL_PREFIX = _getenv("FACE_ENROLL_PREFIX", "faces/enroll/")
+FACE_LOGIN_PREFIX  = _getenv("FACE_LOGIN_PREFIX",  "faces/login/")
+# Prefijos (visitantes)
+VISITOR_ENROLL_PREFIX = _getenv("VISITOR_ENROLL_PREFIX", "faces/visitors/enroll/")
+VISITOR_LOGIN_PREFIX  = _getenv("VISITOR_LOGIN_PREFIX",  "faces/visitors/login/")
 
 s3 = boto3.client(
     "s3",
@@ -71,26 +77,35 @@ def _upsert_userface(user_id: int | str, face_id: Optional[str], s3_key: str) ->
     )
     return uf
 
+def _norm_prefix(prefix: str | None, fallback: str) -> str:
+    p = (prefix or fallback).strip().rstrip("/")
+    return f"{p}/" if p else ""
+
 # ---------------------------
 # API de servicio
 # ---------------------------
-def enroll_face(user_id: int | str, file_obj) -> Dict[str, Any]:
+def enroll_face(user_id: int | str, file_obj, *, key_prefix: str | None = None, is_visitor: bool = False) -> Dict[str, Any]:
     """
     Sube imagen de enrolamiento a S3, indexa en Rekognition con ExternalImageId=user_id
     y persiste/actualiza en BD (ai_userface).
+
+    - key_prefix: prefijo S3 custom (opcional)
+    - is_visitor: si True usa VISITOR_ENROLL_PREFIX por defecto
     """
     if not BUCKET or not COLLECTION:
         raise RuntimeError("Config AWS incompleta: BUCKET/COLLECTION")
 
     _ensure_collection()
 
-    key = f"faces/enroll/{uuid.uuid4()}.jpg"
+    default_prefix = VISITOR_ENROLL_PREFIX if is_visitor else FACE_ENROLL_PREFIX
+    prefix = _norm_prefix(key_prefix, default_prefix)
+    key = f"{prefix}{uuid.uuid4()}.jpg"
     _upload_blob_to_s3(file_obj, key)
 
     resp = rekognition.index_faces(
         CollectionId=COLLECTION,
         Image={"S3Object": {"Bucket": BUCKET, "Name": key}},
-        ExternalImageId=str(user_id),   # SIEMPRE el user_id como ExternalImageId
+        ExternalImageId=str(user_id),
         DetectionAttributes=["DEFAULT"],
         MaxFaces=1,
         QualityFilter="AUTO",
@@ -112,17 +127,22 @@ def enroll_face(user_id: int | str, file_obj) -> Dict[str, Any]:
         "raw": resp,
     }
 
-def search_by_image(file_obj) -> Tuple[Optional[str], Optional[float], str, Dict[str, Any]]:
+def search_by_image(file_obj, *, key_prefix: str | None = None, is_visitor: bool = False) -> Tuple[Optional[str], Optional[float], str, Dict[str, Any]]:
     """
     Sube imagen de login a S3 y busca coincidencias en Rekognition.
     Retorna: (external_id, similarity, s3_key, raw_response)
+
+    - key_prefix: prefijo S3 custom (opcional)
+    - is_visitor: si True usa VISITOR_LOGIN_PREFIX por defecto
     """
     if not BUCKET or not COLLECTION:
         raise RuntimeError("Config AWS incompleta: BUCKET/COLLECTION")
 
     _ensure_collection()
 
-    key = f"faces/login/{uuid.uuid4()}.jpg"
+    default_prefix = VISITOR_LOGIN_PREFIX if is_visitor else FACE_LOGIN_PREFIX
+    prefix = _norm_prefix(key_prefix, default_prefix)
+    key = f"{prefix}{uuid.uuid4()}.jpg"
     _upload_blob_to_s3(file_obj, key)
 
     resp = rekognition.search_faces_by_image(
@@ -136,7 +156,6 @@ def search_by_image(file_obj) -> Tuple[Optional[str], Optional[float], str, Dict
     if not matches:
         return (None, None, key, resp)
 
-    # Ordena por Similarity desc y toma el mejor
     matches.sort(key=lambda m: m.get("Similarity", 0.0), reverse=True)
     best = matches[0]
     external_id = best["Face"].get("ExternalImageId")

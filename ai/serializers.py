@@ -75,3 +75,41 @@ class AlertSerializer(serializers.ModelSerializer):
             return self._presign(INPUT_BUCKET, key)
         except Exception:
             return None
+
+
+
+from rest_framework import serializers
+
+class VisitorRegisterSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=150)
+    last_name  = serializers.CharField(max_length=150)
+    file       = serializers.ImageField()
+
+class VisitorLoginSerializer(serializers.Serializer):
+    file = serializers.ImageField()
+
+
+# ai/serializers.py (añadir al final)
+
+from rest_framework import serializers
+from ai.models.visitor_session import VisitorSession
+
+class VisitorSessionListSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VisitorSession
+        fields = [
+            "id",
+            "full_name",
+            "login_at",
+            "logout_at",
+        ]
+
+    def get_full_name(self, obj: VisitorSession) -> str:
+        first = (obj.user.first_name or "").strip()
+        last = (obj.user.last_name or "").strip()
+        if first or last:
+            return f"{first} {last}".strip()
+        # Fallback amable si no tuvieran nombre cargado
+        return f"Visitante #{obj.user_id}"
