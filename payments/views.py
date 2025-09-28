@@ -235,7 +235,7 @@ def create_checkout_session(request):
     else:
         cargo = get_object_or_404(Charge.objects.select_related("price_config", "propiedad"), pk=charge_id)
 
-        # Seguridad: si NO es admin, solo puede pagar cargos de sus propiedades (owner o tenants)
+        # Seguridad: si NO es admin, solo puede pagar cargos de sus propiedades
         if not is_admin(request.user):
             ok = Property.objects.filter(
                 Q(pk=cargo.propiedad_id) & (Q(owner=request.user) | Q(tenants=request.user))
@@ -252,15 +252,15 @@ def create_checkout_session(request):
     payment, _ = Payment.objects.update_or_create(
         user=request.user,
         **target_kwargs,
-        defaults={
-            "amount": amount_dec,
-            "status": Payment.Status.PENDING,
-        },
+        defaults={"amount": amount_dec, "status": Payment.Status.PENDING},
     )
 
     unit_amount = int((amount_dec * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
+    # Crear la sesión de Checkout
     session = stripe.checkout.Session.create(
+        mode="payment",
+        ui_mode="hosted",  # opcional pero ayuda a garantizar session.url
         payment_method_types=["card"],
         line_items=[{
             "price_data": {
@@ -270,7 +270,6 @@ def create_checkout_session(request):
             },
             "quantity": 1,
         }],
-        mode="payment",
         customer_email=getattr(request.user, "email", None),
         success_url=SUCCESS_URL,
         cancel_url=CANCEL_URL,
@@ -286,7 +285,111 @@ def create_checkout_session(request):
     payment.stripe_session_id = session.id
     payment.save(update_fields=["stripe_session_id"])
 
-    return Response({"sessionId": session.id, "amount": f"{amount_dec:.2f}", "currency": currency.upper()}, status=200)
+    # ---------- AQUI EL FIX DEL NameError + FALLBACK DE URL ----------
+    session_url = None
+    try:
+        # 1) lo normal es que stripe devuelva .url directamente
+        session_url = getattr(session, "url", None)
+        if not session_url:
+            # 2) re-consultar (algunas versiones antiguas)
+            s = stripe.checkout.Session.retrieve(session.id)
+            session_url = getattr(s, "url", None)
+    except Exception:
+        pass
+
+    # 3) último fallback: construir la URL con el id (funciona)
+    if not session_url:
+        session_url = f"https://checkout.stripe.com/c/pay/{session.id}"
+    # ---------------------------------------------------------------
+
+    return Response(
+        {
+            "sessionId": session.id,
+            "url": session_url,  # <--- DEVUELVE SIEMPRE url
+            "amount": f"{amount_dec:.2f}",
+            "currency": currency.upper(),
+        },
+        status=200,
+    )
+
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def create_checkout_session(request):
+#     """
+#     Body JSON:
+#       - reservation_id OR charge_id (exactamente uno)
+#     """
+#     reservation_id = request.data.get("reservation_id")
+#     charge_id = request.data.get("charge_id")
+
+#     if bool(reservation_id) == bool(charge_id):
+#         return Response({"error": "Debes enviar exactamente uno: reservation_id o charge_id."}, status=400)
+
+#     if reservation_id:
+#         reserva = get_object_or_404(
+#             ReservaAreaComun.objects.select_related("area"),
+#             pk=reservation_id,
+#             usuario=request.user,
+#         )
+#         amount_dec = Decimal(reserva.area.precio).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+#         target_kwargs = {"reservation": reserva}
+#         product_name = f"Reserva Área - {reserva.area.nombre}"
+#     else:
+#         cargo = get_object_or_404(Charge.objects.select_related("price_config", "propiedad"), pk=charge_id)
+
+#         # Seguridad: si NO es admin, solo puede pagar cargos de sus propiedades (owner o tenants)
+#         if not is_admin(request.user):
+#             ok = Property.objects.filter(
+#                 Q(pk=cargo.propiedad_id) & (Q(owner=request.user) | Q(tenants=request.user))
+#             ).exists()
+#             if not ok:
+#                 return Response({"detail": "No tienes acceso a este cargo."}, status=403)
+
+#         amount_dec = Decimal(cargo.amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+#         target_kwargs = {"charge": cargo}
+#         product_name = f"Cargo - {cargo.price_config.type}"
+
+#     currency = DEFAULT_CURRENCY
+
+#     payment, _ = Payment.objects.update_or_create(
+#         user=request.user,
+#         **target_kwargs,
+#         defaults={
+#             "amount": amount_dec,
+#             "status": Payment.Status.PENDING,
+#         },
+#     )
+
+#     unit_amount = int((amount_dec * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+#     session = stripe.checkout.Session.create(
+#         payment_method_types=["card"],
+#         line_items=[{
+#             "price_data": {
+#                 "currency": currency,
+#                 "product_data": {"name": product_name},
+#                 "unit_amount": unit_amount,
+#             },
+#             "quantity": 1,
+#         }],
+#         mode="payment",
+#         customer_email=getattr(request.user, "email", None),
+#         success_url=SUCCESS_URL,
+#         cancel_url=CANCEL_URL,
+#         metadata={
+#             "payment_id": str(payment.id),
+#             "user_id": str(request.user.id),
+#             "kind": "reservation" if reservation_id else "charge",
+#             "reservation_id": str(reservation_id or ""),
+#             "charge_id": str(charge_id or ""),
+#         },
+#     )
+
+#     payment.stripe_session_id = session.id
+#     payment.save(update_fields=["stripe_session_id"])
+
+#     return Response({"sessionId": session.id, "amount": f"{amount_dec:.2f}", "currency": currency.upper()}, status=200)
+
 
 
 # =========================
