@@ -104,6 +104,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
      "corsheaders.middleware.CorsMiddleware", 
+     "corsheaders.middleware.CorsMiddleware",
       'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -141,6 +142,16 @@ SIMPLE_JWT = {
 }
 
 AUTH_USER_MODEL = 'users.User'
+
+DEBUG = True
+CORS_ALLOW_ALL_ORIGINS = True           # 🔓 permite cualquier origen
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = ["*"]
+CORS_ALLOW_METHODS  = ["DELETE","GET","OPTIONS","PATCH","POST","PUT"]
+
+ALLOWED_HOSTS = ["*"]                   # 🔓 permite cualquier host
+# Si usas CSRF por cookies:
+CSRF_TRUSTED_ORIGINS = ["http://*", "https://*"]
 
 CORS_ALLOW_ALL_ORIGINS = True 
 

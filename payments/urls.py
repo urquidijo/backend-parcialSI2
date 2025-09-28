@@ -7,6 +7,7 @@ from .views import (
     ChargeViewSet,
     create_checkout_session,
     stripe_webhook,
+    MyChargesViewSet,
     reconcile_payment,
 )
 from .views_reports import payments_report
@@ -14,6 +15,7 @@ from .views_reports import payments_report
 router = DefaultRouter()
 router.register(r"price-configs", PriceConfigViewSet, basename="price-configs")
 router.register(r"charges", ChargeViewSet, basename="charges")
+router.register(r"my-charges", MyChargesViewSet, basename="my-charges") 
 
 urlpatterns = [
     path("create-checkout-session/", create_checkout_session, name="create-checkout-session"),
