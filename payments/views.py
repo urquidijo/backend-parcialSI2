@@ -258,8 +258,6 @@ def create_checkout_session(request):
         defaults={
             "amount": amount_dec,
             "status": Payment.Status.PENDING,
-            "created_at": timezone.localdate(),
-            "updated_at": timezone.localdate(),
         },
     )
 

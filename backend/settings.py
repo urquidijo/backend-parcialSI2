@@ -55,6 +55,25 @@ FRONTEND_CANCEL_URL = env(
     default="http://localhost:5173/reservas?canceled=true"
 )
 
+
+
+
+from dotenv import load_dotenv
+import os, pathlib
+
+BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")  # carga el .env junto a manage.py
+
+def _env(name: str, default: str | None = None) -> str | None:
+    v = os.getenv(name, default)
+    return v.strip() if isinstance(v, str) else v
+
+AWS_ACCESS_KEY_ID     = _env("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = _env("AWS_SECRET_ACCESS_KEY")
+AWS_STORAGE_BUCKET_NAME = _env("AWS_STORAGE_BUCKET_NAME")
+AWS_REGION            = _env("AWS_REGION", "us-east-1")   # ← ya sin espacios
+AWS_COLLECTION_ID     = _env("AWS_COLLECTION_ID")
+FACE_THRESHOLD        = int(_env("FACE_THRESHOLD", "90"))
 # Application definition
 
 INSTALLED_APPS = [
@@ -73,6 +92,7 @@ INSTALLED_APPS = [
 
     # Nuestras apps
     "users",
+    "ai",
     "notices",
     "commons",
     "payments",
@@ -105,6 +125,10 @@ DATABASES = {
         'PORT': '34394',
     }
 }
+
+
+
+
 
 from datetime import timedelta
 
