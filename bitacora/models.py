@@ -1,5 +1,8 @@
 from django.db import models
+from django.utils import timezone
+from zoneinfo import ZoneInfo  # estándar en Python 3.9+
 from users.models import User
+
 
 class Bitacora(models.Model):
     ESTADO_CHOICES = [
@@ -8,11 +11,18 @@ class Bitacora(models.Model):
     ]
 
     usuario = models.ForeignKey(User, on_delete=models.CASCADE, related_name="bitacoras")
-    ip = models.GenericIPAddressField()  # se guardará el IP real
-    fecha_entrada = models.DateField(auto_now_add=True)
-    hora_entrada = models.TimeField(auto_now_add=True)
+    ip = models.GenericIPAddressField()
+    fecha_entrada = models.DateField()
+    hora_entrada = models.TimeField()
     acciones = models.TextField()
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES)
+
+    def save(self, *args, **kwargs):
+        if not self.id:  # solo al crear
+            now = timezone.now().astimezone(ZoneInfo("America/La_Paz"))
+            self.fecha_entrada = now.date()
+            self.hora_entrada = now.time()
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "bitacora"

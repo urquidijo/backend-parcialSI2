@@ -9,8 +9,10 @@ class BitacoraSerializer(serializers.ModelSerializer):
         model = Bitacora
         fields = ["id", "usuario", "usuario_nombre", "ip", "fecha_entrada", "hora_entrada", "acciones", "estado"]
         extra_kwargs = {
-            "usuario": {"write_only": True},  # Solo se envía al crear
-            "ip": {"read_only": True},        # Se llena automáticamente
+            "usuario": {"write_only": True},
+            "ip": {"read_only": True},
+            "fecha_entrada": {"read_only": True},  # ✅ evita el 400
+            "hora_entrada": {"read_only": True},   # ✅ evita el 400       # Se llena automáticamente
         }
 
     def get_usuario_nombre(self, obj):
