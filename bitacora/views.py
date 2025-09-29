@@ -11,3 +11,7 @@ class BitacoraListCreateView(generics.ListCreateAPIView):
         context = super().get_serializer_context()
         context["request"] = self.request
         return context
+    
+    def get_queryset(self):
+        # ya está ordenado por -fecha_entrada y -hora_entrada en el modelo
+        return Bitacora.objects.all()[:30]  # 👈 trae solo las últimas 20

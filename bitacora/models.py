@@ -26,7 +26,7 @@ class Bitacora(models.Model):
 
     class Meta:
         db_table = "bitacora"
-        ordering = ["-fecha_entrada", "-hora_entrada"]
+        ordering = ["-id"]
 
     def __str__(self):
         return f"{self.usuario.email} - {self.acciones} ({self.estado})"
