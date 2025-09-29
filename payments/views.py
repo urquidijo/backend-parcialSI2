@@ -5,7 +5,7 @@ import stripe
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.db.models import Q
+from django.db.models import Q, Sum, F  # FIX: importar Sum y F
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -15,9 +15,8 @@ from commons.models import ReservaAreaComun
 from .models import Payment, PriceConfig, Charge
 from .serializers import ChargeListSerializer, PriceConfigSerializer, ChargeSerializer
 
-
-from django.db.models import Q
 from condominio.models import Property, PropertyTenant
+
 # =========================
 # Stripe & URLs
 # =========================
@@ -161,9 +160,6 @@ class ChargeViewSet(viewsets.ModelViewSet):
     serializer_class = ChargeSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-
-
-
     def get_queryset(self):
         user = self.request.user
         qs = Charge.objects.select_related("price_config", "propiedad")  # "propiedad" es la FK a property
@@ -175,13 +171,12 @@ class ChargeViewSet(viewsets.ModelViewSet):
         # 2) Propiedades donde es dueño
         owned_ids = Property.objects.filter(owner=user).values_list("id", flat=True)
 
-        # 3) Propiedades donde es inquilino (tabla puente que mostraste)
+        # 3) Propiedades donde es inquilino (tabla puente)
         tenant_ids = PropertyTenant.objects.filter(user=user).values_list("property_id", flat=True)
 
         # 4) Unimos ambos conjuntos
         my_prop_ids = list(set(owned_ids).union(set(tenant_ids)))
 
-        # Si no está vinculado a ninguna, no ve nada
         if not my_prop_ids:
             return qs.none()
 
@@ -192,7 +187,7 @@ class ChargeViewSet(viewsets.ModelViewSet):
         if not is_admin(self.request.user):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Solo administradores pueden crear cargos.")
-        serializer.save(created_by=self.request.user)
+        serializer.save()
 
     def perform_update(self, serializer):
         if not is_admin(self.request.user):
@@ -237,8 +232,10 @@ def create_checkout_session(request):
 
         # Seguridad: si NO es admin, solo puede pagar cargos de sus propiedades
         if not is_admin(request.user):
+            # FIX: la relación M2M `tenants` apunta a PropertyTenant, no a User
             ok = Property.objects.filter(
-                Q(pk=cargo.propiedad_id) & (Q(owner=request.user) | Q(tenants=request.user))
+                Q(pk=cargo.propiedad_id) &
+                (Q(owner=request.user) | Q(tenants__user=request.user))
             ).exists()
             if not ok:
                 return Response({"detail": "No tienes acceso a este cargo."}, status=403)
@@ -261,7 +258,7 @@ def create_checkout_session(request):
     session = stripe.checkout.Session.create(
         mode="payment",
         ui_mode="hosted",  # opcional pero ayuda a garantizar session.url
-        payment_method_types=["card"],
+        payment_method_types=["card", "cashapp"],
         line_items=[{
             "price_data": {
                 "currency": currency,
@@ -285,111 +282,27 @@ def create_checkout_session(request):
     payment.stripe_session_id = session.id
     payment.save(update_fields=["stripe_session_id"])
 
-    # ---------- AQUI EL FIX DEL NameError + FALLBACK DE URL ----------
+    # Fallbacks para session.url
     session_url = None
     try:
-        # 1) lo normal es que stripe devuelva .url directamente
         session_url = getattr(session, "url", None)
         if not session_url:
-            # 2) re-consultar (algunas versiones antiguas)
             s = stripe.checkout.Session.retrieve(session.id)
             session_url = getattr(s, "url", None)
     except Exception:
         pass
-
-    # 3) último fallback: construir la URL con el id (funciona)
     if not session_url:
         session_url = f"https://checkout.stripe.com/c/pay/{session.id}"
-    # ---------------------------------------------------------------
 
     return Response(
         {
             "sessionId": session.id,
-            "url": session_url,  # <--- DEVUELVE SIEMPRE url
+            "url": session_url,
             "amount": f"{amount_dec:.2f}",
             "currency": currency.upper(),
         },
         status=200,
     )
-
-# @api_view(["POST"])
-# @permission_classes([IsAuthenticated])
-# def create_checkout_session(request):
-#     """
-#     Body JSON:
-#       - reservation_id OR charge_id (exactamente uno)
-#     """
-#     reservation_id = request.data.get("reservation_id")
-#     charge_id = request.data.get("charge_id")
-
-#     if bool(reservation_id) == bool(charge_id):
-#         return Response({"error": "Debes enviar exactamente uno: reservation_id o charge_id."}, status=400)
-
-#     if reservation_id:
-#         reserva = get_object_or_404(
-#             ReservaAreaComun.objects.select_related("area"),
-#             pk=reservation_id,
-#             usuario=request.user,
-#         )
-#         amount_dec = Decimal(reserva.area.precio).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-#         target_kwargs = {"reservation": reserva}
-#         product_name = f"Reserva Área - {reserva.area.nombre}"
-#     else:
-#         cargo = get_object_or_404(Charge.objects.select_related("price_config", "propiedad"), pk=charge_id)
-
-#         # Seguridad: si NO es admin, solo puede pagar cargos de sus propiedades (owner o tenants)
-#         if not is_admin(request.user):
-#             ok = Property.objects.filter(
-#                 Q(pk=cargo.propiedad_id) & (Q(owner=request.user) | Q(tenants=request.user))
-#             ).exists()
-#             if not ok:
-#                 return Response({"detail": "No tienes acceso a este cargo."}, status=403)
-
-#         amount_dec = Decimal(cargo.amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-#         target_kwargs = {"charge": cargo}
-#         product_name = f"Cargo - {cargo.price_config.type}"
-
-#     currency = DEFAULT_CURRENCY
-
-#     payment, _ = Payment.objects.update_or_create(
-#         user=request.user,
-#         **target_kwargs,
-#         defaults={
-#             "amount": amount_dec,
-#             "status": Payment.Status.PENDING,
-#         },
-#     )
-
-#     unit_amount = int((amount_dec * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-#     session = stripe.checkout.Session.create(
-#         payment_method_types=["card"],
-#         line_items=[{
-#             "price_data": {
-#                 "currency": currency,
-#                 "product_data": {"name": product_name},
-#                 "unit_amount": unit_amount,
-#             },
-#             "quantity": 1,
-#         }],
-#         mode="payment",
-#         customer_email=getattr(request.user, "email", None),
-#         success_url=SUCCESS_URL,
-#         cancel_url=CANCEL_URL,
-#         metadata={
-#             "payment_id": str(payment.id),
-#             "user_id": str(request.user.id),
-#             "kind": "reservation" if reservation_id else "charge",
-#             "reservation_id": str(reservation_id or ""),
-#             "charge_id": str(charge_id or ""),
-#         },
-#     )
-
-#     payment.stripe_session_id = session.id
-#     payment.save(update_fields=["stripe_session_id"])
-
-#     return Response({"sessionId": session.id, "amount": f"{amount_dec:.2f}", "currency": currency.upper()}, status=200)
-
 
 
 # =========================
@@ -470,10 +383,9 @@ def reconcile_payment(request, pk: int):
     return Response({"ok": True})
 
 
-
-
 def _truthy(v):
     return str(v).lower() in ("1","true","t","yes","y","on") if v is not None else False
+
 
 class MyChargesViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -489,7 +401,6 @@ class MyChargesViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_serializer_class(self):
-        # usa el "bonito" para list/retrieve
         return ChargeListSerializer if self.action in ("list", "retrieve", "summary") else ChargeSerializer
 
     def _my_property_ids(self, user_id: int):
@@ -500,10 +411,8 @@ class MyChargesViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         ids = self._my_property_ids(user.id)
-
         qs = Charge.objects.select_related("price_config", "propiedad").filter(propiedad_id__in=ids)
 
-        # filtros opcionales
         prop_id = self.request.query_params.get("property_id")
         if prop_id:
             qs = qs.filter(propiedad_id=prop_id)
@@ -525,13 +434,14 @@ class MyChargesViewSet(viewsets.ReadOnlyModelViewSet):
         open_qs  = qs.filter(status__in=[Charge.Status.PENDING, Charge.Status.OVERDUE])
         paid_qs  = qs.filter(status=Charge.Status.PAID)
 
-        total_open = open_qs.aggregate(total=sum(F("price_config__base_price")))["total"] or 0
+        # FIX: usar agregaciones ORM correctas
+        total_open = open_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0")
         count_open = open_qs.count()
 
-        total_paid = paid_qs.aggregate(total=sum(F("price_config__base_price")))["total"] or 0
+        total_paid = paid_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0")
         count_paid = paid_qs.count()
 
         return Response({
-            "open": {"count": count_open, "amount": f"{total_open:.2f}"},
-            "paid": {"count": count_paid, "amount": f"{total_paid:.2f}"},
+            "open": {"count": count_open, "amount": f"{Decimal(total_open):.2f}"},
+            "paid": {"count":  count_paid, "amount": f"{Decimal(total_paid):.2f}"},
         })
