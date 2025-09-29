@@ -7,6 +7,10 @@ from django.utils.dateparse import parse_date
 from .models import AreaComun, ReservaAreaComun
 from .serializers import AreaComunSerializer, ReservaAreaComunSerializer
 
+from django.utils.timezone import now
+from datetime import timedelta
+
+
 
 def is_admin(user):
     role = getattr(user, "role", None)
@@ -51,6 +55,38 @@ class ReservaAreaComunViewSet(viewsets.ModelViewSet):
                 .order_by("-fecha_reserva", "-hora_inicio"))
     serializer_class = ReservaAreaComunSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+
+    @action(detail=False, methods=["get"], url_path="upcoming")
+    def upcoming(self, request):
+        """
+        GET /api/reservations/upcoming/
+        Devuelve las reservas del usuario que están próximas (ej: próximas 24h).
+        """
+        # Rango configurable (24h)
+        horas = int(request.query_params.get("horas", 24))
+        limite = now() + timedelta(hours=horas)
+
+        qs = (ReservaAreaComun.objects
+              .filter(usuario=request.user, estado="APROBADA")
+              .filter(
+                  fecha_reserva__gte=now().date(),
+                  fecha_reserva__lte=limite.date()
+              )
+              .order_by("fecha_reserva", "hora_inicio"))
+
+        data = [
+            {
+                "id": r.id,
+                "fecha": r.fecha_reserva.strftime("%Y-%m-%d"),
+                "hora_inicio": r.hora_inicio.strftime("%H:%M"),
+                "hora_fin": r.hora_fin.strftime("%H:%M"),
+                "area": r.area.nombre,
+                "estado": r.estado,
+            }
+            for r in qs
+        ]
+        return Response(data, status=200)
 
     def get_queryset(self):
         qs = super().get_queryset()
